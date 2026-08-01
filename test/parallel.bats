@@ -186,12 +186,14 @@ wait_for_file_count() { # <directory> <glob> <expected count> <attempts>
   [[ $(find "$semaphore_dir" -name 'waiter-*' | wc -l) -eq 0 ]]
 }
 
-@test "interrupting a registered waiter removes its wakeup FIFO" {
+@test "terminating a registered waiter removes its wakeup FIFO" {
   # shellcheck disable=SC2030,SC2031
   export SEMAPHORE_MARKER_DIR="$BATS_TEST_TMPDIR/interrupted-waiter/markers"
   local nested_tmp="$BATS_TEST_TMPDIR/interrupted-waiter/tmp"
   local bats_output="$BATS_TEST_TMPDIR/interrupted-waiter.tap"
-  local bats_pid bats_status=0 waiter_file
+  local bats_pid bats_status=0 waiter_file waiter_pid waiter_signal_status=0
+  local waiter_is_fifo=false waiter_pid_is_numeric=false
+  local waiter_not_started=false waiter_cleaned=false
   mkdir -p "$SEMAPHORE_MARKER_DIR" "$nested_tmp"
 
   set -m
@@ -200,7 +202,7 @@ wait_for_file_count() { # <directory> <glob> <expected count> <attempts>
 
   if ! wait_for_file_count "$SEMAPHORE_MARKER_DIR" 'holder-*' 2 200 || \
       ! wait_for_file_count "$nested_tmp" 'waiter-*' 1 200; then
-    kill -SIGINT -- "-$bats_pid" 2>/dev/null || :
+    kill -TERM -- "-$bats_pid" 2>/dev/null || :
     wait "$bats_pid" || :
     set +m
     cat "$bats_output"
@@ -208,14 +210,34 @@ wait_for_file_count() { # <directory> <glob> <expected count> <attempts>
   fi
 
   waiter_file=$(find "$nested_tmp" -name 'waiter-*' -print -quit)
-  [[ -p "$waiter_file" ]]
+  waiter_pid=${waiter_file##*/waiter-}
+  [[ -p "$waiter_file" ]] && waiter_is_fifo=true
+  [[ "$waiter_pid" =~ ^[0-9]+$ ]] && waiter_pid_is_numeric=true
+  [[ ! -e "$SEMAPHORE_MARKER_DIR/waiter-started" ]] && waiter_not_started=true
 
-  kill -SIGINT -- "-$bats_pid"
+  # Terminate the registered file executor while both worker slots remain held.
+  # Killing the whole process group first would race slot release against exit.
+  if $waiter_pid_is_numeric; then
+    kill -TERM "$waiter_pid" || waiter_signal_status=$?
+  else
+    waiter_signal_status=1
+  fi
+  for _ in {1..200}; do
+    [[ -e "$waiter_file" ]] || break
+    sleep 0.01
+  done
+  [[ ! -e "$waiter_file" ]] && waiter_cleaned=true
+
+  kill -TERM -- "-$bats_pid" 2>/dev/null || :
   wait "$bats_pid" || bats_status=$?
   set +m
+
+  $waiter_is_fifo
+  $waiter_pid_is_numeric
+  $waiter_not_started
+  [[ $waiter_signal_status -eq 0 ]]
+  $waiter_cleaned
   [[ $bats_status -ne 0 ]]
-  [[ ! -e "$SEMAPHORE_MARKER_DIR/waiter-started" ]]
-  [[ ! -e "$waiter_file" ]]
 }
 
 @test "setup_file is not over parallelized" {
