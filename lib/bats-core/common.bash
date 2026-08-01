@@ -280,7 +280,7 @@ bats_execute_internal() { # <internal-command> <args...>
   local command=$1 path
   shift
   bats_internal_path path "$command"
-  "$path" "$@"
+  "${BASH?}" "$path" "$@"
 }
 
 # execute command with backed up path
