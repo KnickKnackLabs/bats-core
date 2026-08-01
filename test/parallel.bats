@@ -10,7 +10,6 @@ BATS_TEST_TIMEOUT=10 # only intended for the "short form ..."" test
 
 setup() {
   (type -p "${BATS_PARALLEL_BINARY_NAME:-"parallel"}" &>/dev/null && "${BATS_PARALLEL_BINARY_NAME:-"parallel"}" --version &>/dev/null) || skip "--jobs requires GNU parallel"
-  (type -p flock &>/dev/null || type -p shlock &>/dev/null) || skip "--jobs requires flock/shlock"
 }
 
 check_parallel_tests() { # <expected maximum parallelity>
@@ -39,6 +38,23 @@ check_parallel_tests() { # <expected maximum parallelity>
 
   echo "read_lines: $read_lines"
   [[ $read_lines -eq $expected_number_of_lines ]]
+}
+
+wait_for_file_count() { # <directory> <glob> <expected count> <attempts>
+  local directory="$1"
+  local file_glob="$2"
+  local expected_count="$3"
+  local attempts="$4"
+  local attempt file_count
+
+  for ((attempt = 0; attempt < attempts; ++attempt)); do
+    file_count=$(find "$directory" -name "$file_glob" | wc -l)
+    if ((file_count >= expected_count)); then
+      return 0
+    fi
+    sleep 0.01
+  done
+  return 1
 }
 
 @test "parallel test execution with --jobs" {
@@ -96,6 +112,110 @@ check_parallel_tests() { # <expected maximum parallelity>
   done
 
   check_parallel_tests $PARALLELITY
+}
+
+@test "slot release wakes a waiting file executor promptly" {
+  # shellcheck disable=SC2030,SC2031
+  export SEMAPHORE_MARKER_DIR="$BATS_TEST_TMPDIR/semaphore-wakeup"
+  local bats_output="$BATS_TEST_TMPDIR/semaphore-wakeup.tap"
+  local bats_pid bats_status=0
+  mkdir -p "$SEMAPHORE_MARKER_DIR"
+
+  bats --jobs 2 "$FIXTURE_ROOT/semaphore-wakeup.bats" >"$bats_output" 2>&1 &
+  bats_pid=$!
+
+  if ! wait_for_file_count "$SEMAPHORE_MARKER_DIR" 'holder-*' 2 200; then
+    touch "$SEMAPHORE_MARKER_DIR/release"
+    wait "$bats_pid" || :
+    cat "$bats_output"
+    return 1
+  fi
+
+  touch "$SEMAPHORE_MARKER_DIR/release"
+  if ! wait_for_file_count "$SEMAPHORE_MARKER_DIR" 'waiter' 1 50; then
+    wait "$bats_pid" || :
+    cat "$bats_output"
+    return 1
+  fi
+
+  wait "$bats_pid" || bats_status=$?
+  cat "$bats_output"
+  [[ $bats_status -eq 0 ]]
+}
+
+@test "slot release wakes multiple registered waiters without losing capacity" {
+  local semaphore_run_dir="$BATS_TEST_TMPDIR/multiple-waiters/run"
+  local semaphore_dir="$semaphore_run_dir/semaphores"
+  local helper="$FIXTURE_ROOT/semaphore-helper.bash"
+  local stale_waiter="$semaphore_dir/waiter-stale"
+  local waiter_one waiter_two waiter_status=0
+  # shellcheck disable=SC2030,SC2031
+  export SEMAPHORE_MARKER_DIR="$BATS_TEST_TMPDIR/multiple-waiters/acquired"
+  mkdir -p "$SEMAPHORE_MARKER_DIR" "$semaphore_dir/slot-0"
+
+  env \
+    BATS_RUN_TMPDIR="$semaphore_run_dir" \
+    BATS_SEMAPHORE_NUMBER_OF_SLOTS=1 \
+    SEMAPHORE_LIBRARY="$BATS_ROOT/$BATS_LIBDIR/bats-core/semaphore.bash" \
+    SEMAPHORE_MARKER_DIR="$SEMAPHORE_MARKER_DIR" \
+    bash "$helper" wait &
+  waiter_one=$!
+  env \
+    BATS_RUN_TMPDIR="$semaphore_run_dir" \
+    BATS_SEMAPHORE_NUMBER_OF_SLOTS=1 \
+    SEMAPHORE_LIBRARY="$BATS_ROOT/$BATS_LIBDIR/bats-core/semaphore.bash" \
+    SEMAPHORE_MARKER_DIR="$SEMAPHORE_MARKER_DIR" \
+    bash "$helper" wait &
+  waiter_two=$!
+
+  wait_for_file_count "$semaphore_dir" 'waiter-*' 2 200
+  mkfifo "$stale_waiter"
+  env \
+    BATS_RUN_TMPDIR="$semaphore_run_dir" \
+    BATS_SEMAPHORE_NUMBER_OF_SLOTS=1 \
+    SEMAPHORE_LIBRARY="$BATS_ROOT/$BATS_LIBDIR/bats-core/semaphore.bash" \
+    SEMAPHORE_MARKER_DIR="$SEMAPHORE_MARKER_DIR" \
+    bash "$helper" release 0
+  rm "$stale_waiter"
+
+  wait "$waiter_one" || waiter_status=$?
+  wait "$waiter_two" || waiter_status=$?
+  [[ $waiter_status -eq 0 ]]
+  [[ $(find "$SEMAPHORE_MARKER_DIR" -name 'acquired-*' | wc -l) -eq 2 ]]
+  [[ $(find "$semaphore_dir" -name 'slot-*' | wc -l) -eq 0 ]]
+  [[ $(find "$semaphore_dir" -name 'waiter-*' | wc -l) -eq 0 ]]
+}
+
+@test "interrupting a registered waiter removes its wakeup FIFO" {
+  # shellcheck disable=SC2030,SC2031
+  export SEMAPHORE_MARKER_DIR="$BATS_TEST_TMPDIR/interrupted-waiter/markers"
+  local nested_tmp="$BATS_TEST_TMPDIR/interrupted-waiter/tmp"
+  local bats_output="$BATS_TEST_TMPDIR/interrupted-waiter.tap"
+  local bats_pid bats_status=0 waiter_file
+  mkdir -p "$SEMAPHORE_MARKER_DIR" "$nested_tmp"
+
+  set -m
+  TMPDIR="$nested_tmp" bats --jobs 2 "$FIXTURE_ROOT/semaphore-interrupt.bats" >"$bats_output" 2>&1 &
+  bats_pid=$!
+
+  if ! wait_for_file_count "$SEMAPHORE_MARKER_DIR" 'holder-*' 2 200 || \
+      ! wait_for_file_count "$nested_tmp" 'waiter-*' 1 200; then
+    kill -SIGINT -- "-$bats_pid" 2>/dev/null || :
+    wait "$bats_pid" || :
+    set +m
+    cat "$bats_output"
+    return 1
+  fi
+
+  waiter_file=$(find "$nested_tmp" -name 'waiter-*' -print -quit)
+  [[ -p "$waiter_file" ]]
+
+  kill -SIGINT -- "-$bats_pid"
+  wait "$bats_pid" || bats_status=$?
+  set +m
+  [[ $bats_status -ne 0 ]]
+  [[ ! -e "$SEMAPHORE_MARKER_DIR/waiter-started" ]]
+  [[ ! -e "$waiter_file" ]]
 }
 
 @test "setup_file is not over parallelized" {
