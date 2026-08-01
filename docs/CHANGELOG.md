@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog][kac] and this project adheres to
 
 ### Fixed
 
+* resolve Bats internal tools independently of `PATH` mutations in `setup_suite` (#1209)
 * pretty formatter was not the default on interactive shells anymore (#1220)
 
 ### Documentation
