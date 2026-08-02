@@ -1,36 +1,8 @@
 #!/usr/bin/env bash
 
-bats_run_under_flock() {
-  flock "$BATS_SEMAPHORE_DIR" "$@"
-}
-
-bats_run_under_shlock() {
-      local lockfile="$BATS_SEMAPHORE_DIR/shlock.lock"
-      while ! shlock -p $$ -f "$lockfile"; do
-        sleep 1
-      done
-      # we got the lock now, execute the command
-      "$@"
-      local status=$?
-      # free the lock
-      rm -f "$lockfile"
-      return $status
-    }
-
 # setup the semaphore environment for the loading file
 bats_semaphore_setup() {
-  export -f bats_semaphore_get_free_slot_count
-  export -f bats_semaphore_acquire_while_locked
   export BATS_SEMAPHORE_DIR="$BATS_RUN_TMPDIR/semaphores"
-
-  if command -v flock >/dev/null; then
-    BATS_LOCKING_IMPLEMENTATION=flock
-  elif command -v shlock >/dev/null; then
-    BATS_LOCKING_IMPLEMENTATION=shlock
-  else
-    printf "ERROR: flock/shlock is required for parallelization within files!\n" >&2
-    exit 1
-  fi
 }
 
 # $1 - output directory for stdout/stderr
@@ -43,7 +15,7 @@ bats_semaphore_run() {
   local output_dir=$1
   shift
   local semaphore_slot
-  semaphore_slot=$(bats_semaphore_acquire_slot)
+  bats_semaphore_acquire_slot semaphore_slot
   bats_semaphore_release_wrapper "$output_dir" "$semaphore_slot" "$@" &
   printf "%d\n" "$!"
 }
@@ -69,45 +41,81 @@ bats_semaphore_release_wrapper() {
   return $status
 }
 
-bats_semaphore_acquire_while_locked() {
-  if [[ $(bats_semaphore_get_free_slot_count) -gt 0 ]]; then
-    local slot=0
-    while [[ -e "$BATS_SEMAPHORE_DIR/slot-$slot" ]]; do
-      ((++slot))
-    done
-    if [[ $slot -lt $BATS_SEMAPHORE_NUMBER_OF_SLOTS ]]; then
-      touch "$BATS_SEMAPHORE_DIR/slot-$slot" && printf "%d\n" "$slot" && return 0
+bats_semaphore_try_acquire_slot() {
+  local result_variable="$1"
+  local slot
+
+  for ((slot = 0; slot < BATS_SEMAPHORE_NUMBER_OF_SLOTS; ++slot)); do
+    if mkdir "$BATS_SEMAPHORE_DIR/slot-$slot" 2>/dev/null; then
+      printf -v "$result_variable" "%d" "$slot"
+      return 0
     fi
-  fi
+  done
   return 1
 }
 
+# File descriptors 8 and 9 are internal scheduler channels. They are closed
+# before a test starts or a slot release returns.
+bats_semaphore_cleanup_waiter() {
+  if [[ -n "${BATS_SEMAPHORE_WAITER_FILE:-}" ]]; then
+    exec 9>&-
+    rm -f "$BATS_SEMAPHORE_WAITER_FILE"
+    unset BATS_SEMAPHORE_WAITER_FILE
+  fi
+}
+
+bats_semaphore_register_waiter() {
+  BATS_SEMAPHORE_WAITER_FILE="$BATS_SEMAPHORE_DIR/waiter-$$"
+  rm -f "$BATS_SEMAPHORE_WAITER_FILE"
+  mkfifo "$BATS_SEMAPHORE_WAITER_FILE"
+  exec 9<>"$BATS_SEMAPHORE_WAITER_FILE"
+}
+
+bats_semaphore_wait_for_wakeup() {
+  IFS= read -r _ <&9
+}
+
 # block until a semaphore slot becomes free
-# prints the number of the slot that it received
+# $1 - variable name that receives the acquired slot number
 bats_semaphore_acquire_slot() {
+  local result_variable="$1"
+  local acquired_slot=''
+
   mkdir -p "$BATS_SEMAPHORE_DIR"
-  # wait for a slot to become free
-  # TODO: avoid busy waiting by using signals -> this opens op prioritizing possibilities as well
+  if bats_semaphore_try_acquire_slot acquired_slot; then
+    printf -v "$result_variable" "%s" "$acquired_slot"
+    return 0
+  fi
+
+  bats_semaphore_register_waiter
   while true; do
-    # don't lock for reading, we are fine with spuriously getting no free slot
-    if [[ $(bats_semaphore_get_free_slot_count) -gt 0 ]]; then
-      bats_run_under_"$BATS_LOCKING_IMPLEMENTATION" \
-        bash -c bats_semaphore_acquire_while_locked \
-      && break
+    acquired_slot=''
+    # A slot can be released between the first acquisition attempt and waiter
+    # registration. Try once more after registration to close that lost-wakeup
+    # window. A wakeup written before this attempt remains buffered in the FIFO.
+    if bats_semaphore_try_acquire_slot acquired_slot; then
+      bats_semaphore_cleanup_waiter
+      printf -v "$result_variable" "%s" "$acquired_slot"
+      return 0
     fi
-    sleep 1
+    bats_semaphore_wait_for_wakeup
   done
 }
 
 bats_semaphore_release_slot() {
-  # we don't need to lock this, since only our process owns this file
-  # and freeing a semaphore cannot lead to conflicts with others
-  rm "$BATS_SEMAPHORE_DIR/slot-$1" # this will fail if we had not acquired a semaphore!
-}
+  local semaphore_slot="$1"
+  local waiter_file
 
-bats_semaphore_get_free_slot_count() {
-  # find might error out without returning something useful when a file is deleted,
-  # while the directory is traversed ->  only continue when there was no error
-  until used_slots=$(find "$BATS_SEMAPHORE_DIR" -name 'slot-*' 2>/dev/null | wc -l); do :; done
-  echo $((BATS_SEMAPHORE_NUMBER_OF_SLOTS - used_slots))
+  rmdir "$BATS_SEMAPHORE_DIR/slot-$semaphore_slot" || return
+
+  # Wake all registered waiters. Atomic slot directories preserve the worker
+  # cap; waking all avoids stranding capacity behind a stale waiter process.
+  # Opening each FIFO read-write keeps stale registrations from blocking release.
+  for waiter_file in "$BATS_SEMAPHORE_DIR"/waiter-*; do
+    [[ -p "$waiter_file" ]] || continue
+    if exec 8<>"$waiter_file"; then
+      printf '\n' >&8 || :
+      exec 8>&-
+    fi
+  done
 }

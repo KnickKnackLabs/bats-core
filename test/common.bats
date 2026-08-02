@@ -5,12 +5,12 @@
   mkdir -p "$libexec" "$path_bin"
 
   # shellcheck disable=SC2016 # generated script variables expand when the fixture runs
-  printf '%s\n' '#!/bin/sh' 'printf "internal:%s\n" "$1"' >"$libexec/bats-fake"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "internal:%s\n" "$1"' >"$libexec/bats-fake"
   # shellcheck disable=SC2016 # generated script variables expand when the fixture runs
   printf '%s\n' '#!/bin/sh' 'printf "path:%s\n" "$1"' >"$path_bin/bats-fake"
   chmod +x "$libexec/bats-fake" "$path_bin/bats-fake"
 
-  BATS_LIBEXEC="$libexec" PATH="$path_bin:/usr/bin:/bin" \
+  BATS_LIBEXEC="$libexec" PATH="$path_bin" \
     run -0 bats_execute_internal bats-fake "argument with spaces"
   [ "$output" = "internal:argument with spaces" ]
 }

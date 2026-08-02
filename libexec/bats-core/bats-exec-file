@@ -145,6 +145,9 @@ bats_file_exit_trap() {
     BATS_ERROR_STATUS=$last_return_code
   fi
   trap - ERR EXIT
+  if declare -F bats_semaphore_cleanup_waiter >/dev/null; then
+    bats_semaphore_cleanup_waiter
+  fi
   local failure_reason
   local -i failure_test_index=$((BATS_FILE_FIRST_TEST_NUMBER_IN_SUITE + 1))
   if [[ -n "${BATS_TEST_SKIPPED-}" ]]; then

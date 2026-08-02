@@ -363,7 +363,6 @@ setup() {
     if [[ -z "${BATS_NO_PARALLELIZE_ACROSS_FILES:-}" ]]; then
       type -p parallel &>/dev/null || skip "Don't check file parallelized without GNU parallel"
     fi
-    (type -p flock &>/dev/null || type -p shlock &>/dev/null) || skip "Don't check parallelized without flock/shlock "
   fi
 
   # PATH required for windows
@@ -751,7 +750,6 @@ END_OF_ERR_MSG
 
 @test "Parallel mode works on MacOS with over subscription (issue #433)" {
   type -p "${BATS_PARALLEL_BINARY_NAME:-"parallel"}" &>/dev/null || skip "--jobs requires GNU parallel"
-  (type -p flock &>/dev/null || type -p shlock &>/dev/null) || skip "--jobs requires flock/shlock"
   reentrant_run bats -j 2 "$FIXTURE_ROOT/issue-433"
 
   [ "$status" -eq 0 ]
@@ -1182,21 +1180,21 @@ END_OF_ERR_MSG
   rm -rf "$relative_output_dir"
 }
 
-@test "Tell about missing flock and shlock" {
+@test "Parallel mode does not invoke flock or shlock" {
   if ! command -v parallel; then
     skip "this test requires GNU parallel to be installed"
   fi
-  if command -v flock; then
-    skip "this test requires flock not to be installed"
-  fi
-  if command -v shlock; then
-    skip "this test requires flock not to be installed"
-  fi
+
+  local mock_bin="$BATS_TEST_TMPDIR/mock-lock-commands"
+  local lock_command
+  mkdir -p "$mock_bin"
+  for lock_command in flock shlock; do
+    printf '#!/usr/bin/env bash\nexit 99\n' >"$mock_bin/$lock_command"
+    chmod +x "$mock_bin/$lock_command"
+  done
 
   bats_require_minimum_version 1.5.0
-  reentrant_run ! bats --jobs 2 "$FIXTURE_ROOT/parallel.bats"
-  [ "${lines[0]}" == "ERROR: flock/shlock is required for parallelization within files!" ]
-  [ "${#lines[@]}" -eq 1 ]
+  PATH="$mock_bin:$PATH" reentrant_run -0 bats --jobs 2 "$FIXTURE_ROOT/parallel.bats"
 }
 
 @test "Test with a name that is waaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaay too long" {
@@ -1629,9 +1627,6 @@ END_OF_ERR_MSG
 @test "--abort prevents further tests from running in parallel mode" {
   if ! type -p parallel &>/dev/null; then
     skip "Requires GNU parallel"
-  fi
-  if ! (type -p flock &>/dev/null || type -p shlock &>/dev/null); then
-    skip "Requires flock/shlock"
   fi
   if [[ ${BATS_PARALLEL_BINARY_NAME-} == rush ]]; then
     skip "--halt only works for GNU parallel"
