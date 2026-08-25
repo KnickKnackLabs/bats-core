@@ -27,12 +27,36 @@ abort() {
   exit 1
 }
 
-print_parallel_test_filenames() {
+bats_parallel_runner_is_available() {
+  type -p "$parallel_binary_name" >/dev/null &&
+    "$parallel_binary_name" --version &>/dev/null
+}
+
+bats_print_parallel_test_filenames() {
   if [[ "${parallel_binary_name##*/}" == rush ]]; then
     printf '%q\n' "${BATS_UNIQUE_TEST_FILENAMES[@]}"
   else
     printf '%s\n' "${BATS_UNIQUE_TEST_FILENAMES[@]}"
   fi
+}
+
+bats_run_test_files_in_parallel() {
+  local quoted_bash quoted_exec_file quoted_flags
+  printf -v quoted_bash '%q' "${BASH?}"
+  printf -v quoted_exec_file '%q' "$bats_exec_file"
+  printf -v quoted_flags '%q ' "${flags[@]}"
+
+  bats_print_parallel_test_filenames |
+    "$parallel_binary_name" \
+      "${parallel_flags[@]}" \
+      -- \
+      "$quoted_bash" \
+      "$quoted_exec_file" \
+      "$quoted_flags" \
+      '{#}' \
+      '{}' \
+      "$TESTS_LIST_FILE" \
+      2>&1
 }
 
 # shellcheck source=lib/bats-core/common.bash disable=SC2153
@@ -120,8 +144,7 @@ while [[ "$#" -ne 0 ]]; do
 done
 
 if [[ "$num_jobs" != 1 ]]; then
-  if [[ -z "$bats_no_parallelize_across_files" ]] &&
-    { ! type -p "${parallel_binary_name}" >/dev/null || ! "${parallel_binary_name}" --version &>/dev/null; }; then
+  if [[ -z "$bats_no_parallelize_across_files" ]] && ! bats_parallel_runner_is_available; then
     abort "Cannot execute \"${num_jobs}\" jobs because parallel runner \"${parallel_binary_name}\" is unavailable"
   fi
   # shellcheck source=lib/bats-core/semaphore.bash
@@ -333,11 +356,7 @@ if [[ "$num_jobs" -gt 1 ]] && [[ -z "$bats_no_parallelize_across_files" ]]; then
     parallel_flags+=('--halt' 'now,fail=1')
   fi
   # run files in parallel to get the maximum pool of parallel tasks
-  # shellcheck disable=SC2086,SC2068
-  # we need to handle the quoting of ${flags[@]} ourselves,
-  # because parallel can only quote it as one
-  print_parallel_test_filenames |
-    "${parallel_binary_name}" "${parallel_flags[@]}" -- "$(printf "%q" "${BASH?}")" "$(printf "%q" "$bats_exec_file")" "$(printf "%q " "${flags[@]}")" "{#}" "{}" "$TESTS_LIST_FILE" 2>&1 || bats_exec_suite_status=1
+  bats_run_test_files_in_parallel || bats_exec_suite_status=1
 else
   file_index=0
   for filename in "${BATS_UNIQUE_TEST_FILENAMES[@]}"; do
