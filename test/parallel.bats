@@ -83,6 +83,31 @@ wait_for_file_count() { # <directory> <glob> <expected count> <attempts>
   [[ "$status" -eq 0 ]]
 }
 
+@test "Rush preserves whitespace-bearing test filenames" {
+  local parallel_binary="${BATS_PARALLEL_BINARY_NAME:-parallel}"
+  local spaced_test_file="$BATS_TEST_TMPDIR/whitespace target/passing test.bats"
+
+  [[ "${parallel_binary##*/}" == rush ]] || skip "requires Rush"
+  mkdir -p "$(dirname "$spaced_test_file")"
+  cp "$FIXTURE_ROOT/../bats/passing.bats" "$spaced_test_file"
+
+  reentrant_run bats --jobs 2 "$spaced_test_file"
+
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == $'1..1\nok 1 a passing test' ]]
+}
+
+@test "a missing selected parallel runner fails early" {
+  local missing_runner="$BATS_TEST_TMPDIR/missing-parallel-runner"
+
+  reentrant_run -1 bats \
+    --jobs 2 \
+    --parallel-binary-name "$missing_runner" \
+    "$FIXTURE_ROOT/../bats/passing.bats"
+
+  [[ "$output" == "Error: Cannot execute \"2\" jobs because parallel runner \"$missing_runner\" is unavailable" ]]
+}
+
 @test "parallel suite execution with --jobs" {
   # shellcheck disable=SC2034
   BATS_TEST_RETRIES=2 # be more robust against flaky MacOS runners
