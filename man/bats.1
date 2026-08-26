@@ -1,6 +1,6 @@
 .\" generated with Ronn-NG/v0.10.1
 .\" http://github.com/apjanke/ronn-ng/tree/0.10.1
-.TH "BATS" "1" "July 2026" "bats-core" "Bash Automated Testing System"
+.TH "BATS" "1" "August 2026" "bats-core" "Bash Automated Testing System"
 .SH "NAME"
 \fBbats\fR \- Bash Automated Testing System
 .SH "SYNOPSIS"
@@ -19,6 +19,15 @@ See \fBbats\fR(7) for more information on writing Bats tests\.
 To run your tests, invoke the \fBbats\fR interpreter with a path to a test file\. The file's test cases are run sequentially and in isolation\. If all the test cases pass, \fBbats\fR exits with a \fB0\fR status code\. If there are any failures, \fBbats\fR exits with a \fB1\fR status code\.
 .P
 You can invoke the \fBbats\fR interpreter with multiple test file arguments, or with a path to a directory containing multiple \fB\.bats\fR files\. Bats will run each test file individually and aggregate the results\. If any test case fails, \fBbats\fR exits with a \fB1\fR status code\.
+.SH "DEFAULT TEST TARGET"
+Projects can set \fBBATS_DEFAULT_TEST_TARGET\fR to one test file or directory path\. Bats uses this target only when no test paths remain after command\-line option parsing, so an explicit target always takes precedence\. The complete value is one path; relative values resolve from the current working directory, and whitespace remains part of the path\.
+.P
+An unset or empty \fBBATS_DEFAULT_TEST_TARGET\fR preserves the normal requirement to pass at least one test path\.
+.IP "" 4
+.nf
+BATS_DEFAULT_TEST_TARGET=test bats \-\-filter integration
+.fi
+.IP "" 0
 .SH "FILTERING TESTS"
 There are multiple mechanisms to filter which tests to execute:
 .IP "\(bu" 4
