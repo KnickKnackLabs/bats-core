@@ -13,6 +13,49 @@ setup() {
   [ $status -eq 1 ]
   [ "${lines[0]}" == 'Error: Must specify at least one <test>' ]
   [ "${lines[1]%% *}" == 'Usage:' ]
+
+  reentrant_run env BATS_DEFAULT_TEST_TARGET= bats
+  [ $status -eq 1 ]
+  [ "${lines[0]}" == 'Error: Must specify at least one <test>' ]
+  [ "${lines[1]%% *}" == 'Usage:' ]
+}
+
+@test "BATS_DEFAULT_TEST_TARGET selects a target for no-argument and options-only calls" {
+  reentrant_run env BATS_DEFAULT_TEST_TARGET="$FIXTURE_ROOT/passing.bats" bats
+  [ $status -eq 0 ]
+  [ "${lines[0]}" = '1..1' ]
+  [ "${lines[1]}" = 'ok 1 a passing test' ]
+
+  reentrant_run env BATS_DEFAULT_TEST_TARGET="$FIXTURE_ROOT/passing.bats" bats --filter 'a passing test'
+  [ $status -eq 0 ]
+  [ "${lines[0]}" = '1..1' ]
+  [ "${lines[1]}" = 'ok 1 a passing test' ]
+}
+
+@test "an explicit target takes precedence over BATS_DEFAULT_TEST_TARGET" {
+  reentrant_run env BATS_DEFAULT_TEST_TARGET="$FIXTURE_ROOT/failing.bats" bats "$FIXTURE_ROOT/passing.bats"
+  [ $status -eq 0 ]
+  [ "${lines[0]}" = '1..1' ]
+  [ "${lines[1]}" = 'ok 1 a passing test' ]
+}
+
+@test "a relative BATS_DEFAULT_TEST_TARGET resolves from the working directory" {
+  cd "$FIXTURE_ROOT"
+
+  reentrant_run env BATS_DEFAULT_TEST_TARGET=passing.bats bats
+  [ $status -eq 0 ]
+  [ "${lines[0]}" = '1..1' ]
+  [ "${lines[1]}" = 'ok 1 a passing test' ]
+}
+
+@test "BATS_DEFAULT_TEST_TARGET preserves whitespace in a target path" {
+  local spaced_target="$BATS_TEST_TMPDIR/default target.bats"
+  cp "$FIXTURE_ROOT/passing.bats" "$spaced_target"
+
+  reentrant_run env BATS_DEFAULT_TEST_TARGET="$spaced_target" bats
+  [ $status -eq 0 ]
+  [ "${lines[0]}" = '1..1' ]
+  [ "${lines[1]}" = 'ok 1 a passing test' ]
 }
 
 @test "invalid option prints message and usage instructions" {
