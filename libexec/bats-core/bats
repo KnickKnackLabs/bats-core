@@ -334,6 +334,10 @@ while [[ "$#" -ne 0 ]]; do
   shift
 done
 
+if [[ "${#arguments[@]}" -eq 0 && -n "${BATS_DEFAULT_TEST_TARGET:-}" ]]; then
+  arguments+=("$BATS_DEFAULT_TEST_TARGET")
+fi
+
 if [[ ! $BATS_LINE_REFERENCE_FORMAT =~ (custom|comma_line|colon|uri) ]]; then
   abort "Invalid BATS_LINE_REFERENCE_FORMAT '$BATS_LINE_REFERENCE_FORMAT' (e.g. via --line-reference-format)"
 fi

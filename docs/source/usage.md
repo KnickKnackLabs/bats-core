@@ -19,6 +19,21 @@ Test cases from each file are run sequentially and in isolation. If all the test
 cases pass, `bats` exits with a `0` status code. If there are any failures,
 `bats` exits with a `1` status code.
 
+## Default test target
+
+Projects can set `BATS_DEFAULT_TEST_TARGET` to one test file or directory path.
+Bats uses this target only when no test paths remain after command-line option
+parsing, so an explicit target always takes precedence. The complete value is
+one path; relative values resolve from the current working directory, and
+whitespace remains part of the path.
+
+An unset or empty `BATS_DEFAULT_TEST_TARGET` preserves the normal requirement to
+pass at least one test path.
+
+```bash
+BATS_DEFAULT_TEST_TARGET=test bats --filter integration
+```
+
 When you run Bats from a terminal, you'll see output as each test is performed,
 with a check-mark next to the test's name if it passes or an "X" if it fails.
 

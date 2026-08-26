@@ -43,6 +43,20 @@ or with a path to a directory containing multiple `.bats` files. Bats
 will run each test file individually and aggregate the results. If any
 test case fails, `bats` exits with a `1` status code.
 
+DEFAULT TEST TARGET
+-------------------
+
+Projects can set `BATS_DEFAULT_TEST_TARGET` to one test file or directory
+path. Bats uses this target only when no test paths remain after command-line
+option parsing, so an explicit target always takes precedence. The complete
+value is one path; relative values resolve from the current working directory,
+and whitespace remains part of the path.
+
+An unset or empty `BATS_DEFAULT_TEST_TARGET` preserves the normal requirement
+to pass at least one test path.
+
+    BATS_DEFAULT_TEST_TARGET=test bats --filter integration
+
 FILTERING TESTS
 ---------------
 
